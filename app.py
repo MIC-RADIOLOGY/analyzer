@@ -7,15 +7,15 @@ st.title("Accounts Receivable Aging Analyzer")
 st.write("Upload an aging report to analyze receivables automatically.")
 
 # -------------------------------
-# Automatic Column Detection
+# Robust Column Detection
 # -------------------------------
 def detect_columns(df):
     mapping = {}
     for c in df.columns:
-        c_lower = c.lower()
+        c_lower = c.lower().strip()
         if "provider" in c_lower or "debtor" in c_lower:
             mapping["provider"] = c
-        elif "balance" in c_lower:
+        elif "balance" in c_lower or "outstanding" in c_lower or "total" in c_lower:
             mapping["balance"] = c
         elif "current" in c_lower:
             mapping["current"] = c
@@ -29,9 +29,9 @@ def detect_columns(df):
             mapping["120"] = c
         elif "150" in c_lower:
             mapping["150"] = c
-        elif "180" in c_lower:
+        elif "180" in c_lower or "over" in c_lower:
             mapping["180"] = c
-        elif "unalloc" in c_lower:
+        elif "unalloc" in c_lower or "credit" in c_lower:
             mapping["unallocated"] = c
     return mapping
 
@@ -50,82 +50,83 @@ if uploaded_file:
     st.subheader("Uploaded Data")
     st.dataframe(df)
 
-    # Detect columns automatically
+    # Show raw column names for debugging
+    st.subheader("Columns in Uploaded File")
+    st.write(df.columns.tolist())
+
+    # Detect columns
     mapping = detect_columns(df)
+    st.subheader("Detected Columns")
+    st.write(mapping)
 
-    # -------------------------------
-    # Calculate Totals and KPIs
-    # -------------------------------
-    balance = mapping["balance"]
-    current = mapping["current"]
-    d30 = mapping["30"]
-    d60 = mapping["60"]
-    d90 = mapping["90"]
-    d120 = mapping["120"]
-    d150 = mapping["150"]
-    d180 = mapping["180"]
-    provider = mapping["provider"]
-    unallocated = mapping["unallocated"]
+    # Check if essential columns are detected
+    required_keys = ["provider","balance","current","30","60","90","120","150","180","unallocated"]
+    missing = [k for k in required_keys if k not in mapping]
+    if missing:
+        st.error(f"Missing required columns: {missing}")
+    else:
+        # -------------------------------
+        # Totals & KPIs
+        # -------------------------------
+        total_ar = df[mapping["balance"]].sum()
+        current_total = df[mapping["current"]].sum()
+        d30_total = df[mapping["30"]].sum()
+        d60_total = df[mapping["60"]].sum()
+        d90_total = df[mapping["90"]].sum()
+        d120_total = df[mapping["120"]].sum()
+        d150_total = df[mapping["150"]].sum()
+        d180_total = df[mapping["180"]].sum()
+        unallocated_total = df[mapping["unallocated"]].sum()
 
-    total_ar = df[balance].sum()
-    current_total = df[current].sum()
-    d30_total = df[d30].sum()
-    d60_total = df[d60].sum()
-    d90_total = df[d90].sum()
-    d120_total = df[d120].sum()
-    d150_total = df[d150].sum()
-    d180_total = df[d180].sum()
-    unallocated_total = df[unallocated].sum()
+        overdue = total_ar - current_total
+        adjusted_receivables = total_ar - abs(unallocated_total)
+        overdue_percent = overdue / total_ar * 100
+        high_risk = d90_total + d120_total + d150_total + d180_total
+        bad_debt = d120_total + d150_total + d180_total
 
-    overdue = total_ar - current_total
-    adjusted_receivables = total_ar - abs(unallocated_total)
-    overdue_percent = overdue / total_ar * 100
-    high_risk = d90_total + d120_total + d150_total + d180_total
-    bad_debt = d120_total + d150_total + d180_total
+        # -------------------------------
+        # KPI Dashboard
+        # -------------------------------
+        st.subheader("Key Financial Metrics")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Receivables", f"${total_ar:,.0f}")
+        col2.metric("Adjusted Receivables", f"${adjusted_receivables:,.0f}")
+        col3.metric("Overdue", f"${overdue:,.0f}")
+        col4.metric("Overdue %", f"{overdue_percent:.1f}%")
 
-    # -------------------------------
-    # KPI Dashboard
-    # -------------------------------
-    st.subheader("Key Financial Metrics")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Receivables", f"${total_ar:,.0f}")
-    col2.metric("Adjusted Receivables", f"${adjusted_receivables:,.0f}")
-    col3.metric("Overdue", f"${overdue:,.0f}")
-    col4.metric("Overdue %", f"{overdue_percent:.1f}%")
+        # -------------------------------
+        # Aging Distribution Chart
+        # -------------------------------
+        aging_data = pd.DataFrame({
+            "Bucket":["180+","150","120","90","60","30","Current"],
+            "Amount":[d180_total,d150_total,d120_total,d90_total,d60_total,d30_total,current_total]
+        })
+        fig = px.bar(aging_data, x="Bucket", y="Amount", title="Accounts Receivable Aging Distribution")
+        st.plotly_chart(fig, use_container_width=True)
 
-    # -------------------------------
-    # Aging Distribution Chart
-    # -------------------------------
-    aging_data = pd.DataFrame({
-        "Bucket":["180+","150","120","90","60","30","Current"],
-        "Amount":[d180_total,d150_total,d120_total,d90_total,d60_total,d30_total,current_total]
-    })
-    fig = px.bar(aging_data, x="Bucket", y="Amount", title="Accounts Receivable Aging Distribution")
-    st.plotly_chart(fig, use_container_width=True)
+        # -------------------------------
+        # Top Debtors
+        # -------------------------------
+        st.subheader("Top Debtors")
+        top_debtors = df.sort_values(mapping["balance"], ascending=False).head(10)
+        fig2 = px.bar(top_debtors, x=mapping["provider"], y=mapping["balance"], title="Top 10 Debtors")
+        st.plotly_chart(fig2, use_container_width=True)
 
-    # -------------------------------
-    # Top Debtors Chart
-    # -------------------------------
-    st.subheader("Top Debtors")
-    top_debtors = df.sort_values(balance, ascending=False).head(10)
-    fig2 = px.bar(top_debtors, x=provider, y=balance, title="Top 10 Debtors")
-    st.plotly_chart(fig2, use_container_width=True)
+        # -------------------------------
+        # Credit Balances
+        # -------------------------------
+        st.subheader("Providers With Credit Balances")
+        credit_balances = df[df[mapping["unallocated"]] < 0]
+        st.dataframe(credit_balances[[mapping["provider"], mapping["unallocated"]]])
 
-    # -------------------------------
-    # Credit Balances
-    # -------------------------------
-    st.subheader("Providers With Credit Balances")
-    credit_balances = df[df[unallocated] < 0]
-    st.dataframe(credit_balances[[provider, unallocated]])
+        # -------------------------------
+        # Management Insights
+        # -------------------------------
+        st.subheader("Management Insights")
+        top3_total = top_debtors.head(3)[mapping["balance"]].sum()
+        concentration = top3_total / total_ar * 100
 
-    # -------------------------------
-    # Management Insights
-    # -------------------------------
-    st.subheader("Management Insights")
-    top3_total = top_debtors.head(3)[balance].sum()
-    concentration = top3_total / total_ar * 100
-
-    st.write(f"""
+        st.write(f"""
 **Total Receivables:** ${total_ar:,.0f}  
 **Adjusted Receivables:** ${adjusted_receivables:,.0f}  
 **Overdue Receivables:** ${overdue:,.0f} ({overdue_percent:.1f}%)  
